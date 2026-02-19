@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:math_game_clean/route_observer.dart';
 import 'screens/home_screen.dart';
 
 void main() {
@@ -12,6 +13,7 @@ class MathGameApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: '브레인롯 수학게임',
+      navigatorObservers: [routeObserver],
       theme: ThemeData(
         primarySwatch: Colors.blue,
         textTheme: const TextTheme(

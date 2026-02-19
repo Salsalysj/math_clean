@@ -1,8 +1,10 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'dart:math';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'reward_screen.dart';
 import 'home_screen.dart';
+import 'package:math_game_clean/special_characters.dart';
 
 class QuizScreen extends StatefulWidget {
   final bool hasKeys;
@@ -119,7 +121,17 @@ class _QuizScreenState extends State<QuizScreen> {
   void checkAnswer() async {
     if (_answerController.text.isEmpty) return;
     
-    // 치트 코드 체크 (1번 문제에서만)
+    // ─── 치트키 (퀴즈 1번 문제 답란에 입력 후 제출) ─────────────────────────
+    // 111111 : 만점(10점) 처리 → 보상 화면으로 이동
+    // 111119 : 만점(10점) 처리 → 보상 화면으로 이동 → 스페셜 캐릭터 보상 획득
+    // 222222 : 0점 처리 → 보상 화면으로 이동
+    // 333333 : 열쇠 5개 충전 → 홈으로
+    // 000000 : 도감 전부 리셋 (브레인롯·몹·스페셜·스페셜 레벨) → 홈으로
+    // 999999 : 도감 전부 해금 (브레인롯 + 마인크래프트) → 홈으로
+    // 999991 : 브레인롯 캐릭터 도감 100% → 홈으로
+    // 999992 : 마인크래프트 몹 도감 100% → 홈으로
+    // 999993 : 스페셜 캐릭터 도감 100% (레벨 1) → 홈으로
+    // ─────────────────────────────────────────────────────────────────
     if (currentQuestion == 1) {
       if (_answerController.text == '111111') {
         // 10문제 모두 맞춘 것으로 간주
@@ -127,6 +139,15 @@ class _QuizScreenState extends State<QuizScreen> {
           context,
           MaterialPageRoute(
             builder: (context) => RewardScreen(score: 10, hasKeys: widget.hasKeys),
+          ),
+        );
+        return;
+      } else if (_answerController.text == '111119') {
+        // 만점 + 스페셜 캐릭터 보상
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (context) => RewardScreen(score: 10, hasKeys: widget.hasKeys, forceSpecialReward: true),
           ),
         );
         return;
@@ -160,6 +181,33 @@ class _QuizScreenState extends State<QuizScreen> {
       } else if (_answerController.text == '333333') {
         // 열쇠 5개 충전
         await _fillAllKeys();
+        Navigator.pushAndRemoveUntil(
+          context,
+          MaterialPageRoute(builder: (context) => const HomeScreen()),
+          (route) => false,
+        );
+        return;
+      } else if (_answerController.text == '999991') {
+        // 브레인롯 캐릭터 도감 100%
+        await _unlockBrainrot100();
+        Navigator.pushAndRemoveUntil(
+          context,
+          MaterialPageRoute(builder: (context) => const HomeScreen()),
+          (route) => false,
+        );
+        return;
+      } else if (_answerController.text == '999992') {
+        // 마인크래프트 몹 도감 100%
+        await _unlockMinecraft100();
+        Navigator.pushAndRemoveUntil(
+          context,
+          MaterialPageRoute(builder: (context) => const HomeScreen()),
+          (route) => false,
+        );
+        return;
+      } else if (_answerController.text == '999993') {
+        // 스페셜 캐릭터 도감 100%
+        await _unlockSpecial100();
         Navigator.pushAndRemoveUntil(
           context,
           MaterialPageRoute(builder: (context) => const HomeScreen()),
@@ -214,7 +262,9 @@ class _QuizScreenState extends State<QuizScreen> {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('collected_characters');
     await prefs.remove('collected_mobs');
-    print('도감 리셋 완료 (브레인롯 캐릭터 + 마인크래프트 몹)');
+    await prefs.remove('collected_special');
+    await prefs.remove('special_levels');
+    print('도감 리셋 완료 (브레인롯 + 마인크래프트 + 스페셜)');
   }
 
   Future<void> _unlockAllCharacters() async {
@@ -286,6 +336,112 @@ class _QuizScreenState extends State<QuizScreen> {
     await prefs.setInt('keys', 5);
     await prefs.setInt('last_key_time', DateTime.now().millisecondsSinceEpoch);
     print('열쇠 5개 충전 완료');
+  }
+
+  Future<void> _unlockBrainrot100() async {
+    final prefs = await SharedPreferences.getInstance();
+    final List<String> allCharacters = [
+      'brainrot_image/가라마라라마라라만 단 마두둥둥 탁 툰퉁 퍼르쿤퉁.webp',
+      'brainrot_image/고릴로 워터멜론드릴로.webp',
+      'brainrot_image/그라이푸시 메두시.webp',
+      'brainrot_image/글로르보 프루토드릴로.webp',
+      'brainrot_image/라 바카 사투르노 사투르니타.webp',
+      'brainrot_image/리노 토스트리노.webp',
+      'brainrot_image/리릴리 라릴라.webp',
+      'brainrot_image/마카키니 바나니니.webp',
+      'brainrot_image/바나니타 돌피니타.webp',
+      'brainrot_image/발레리나 카푸치나.webp',
+      'brainrot_image/발레리노 로로로.webp',
+      'brainrot_image/보네카 암발라부.webp',
+      'brainrot_image/보브리토 반디토.webp',
+      'brainrot_image/봄바르디로 크로코딜로.webp',
+      'brainrot_image/봄봄비니 구지니.webp',
+      'brainrot_image/부르발로니 룰릴롤리.webp',
+      'brainrot_image/브르르 브르르 파타핌.webp',
+      'brainrot_image/브리 브리 비쿠스 디쿠스 봄비쿠스.webp',
+      'brainrot_image/블루베리니 옥토푸시니.webp',
+      'brainrot_image/오 딘딘딘딘 둔 마 딘딘딘 둔.webp',
+      'brainrot_image/오랑구티니 아나나시니.webp',
+      'brainrot_image/일 칵토 히포포타모.webp',
+      'brainrot_image/지라파 첼레스테.webp',
+      'brainrot_image/지브라 주브라 지브라리니.webp',
+      'brainrot_image/침판지니 바나니니.webp',
+      'brainrot_image/카푸치노 아사시노.webp',
+      'brainrot_image/코코판토 엘레판토.webp',
+      'brainrot_image/크로코딜도 페니시니.webp',
+      'brainrot_image/타 타 타 타 타 타 타 타 타 타 타 사후르.webp',
+      'brainrot_image/퉁 퉁 퉁 퉁 퉁 퉁 퉁 퉁 퉁 사후르.webp',
+      'brainrot_image/트랄랄레로 트랄랄라.webp',
+      'brainrot_image/트래코투코툴루 델라펠라두스투즈.webp',
+      'brainrot_image/트룰리메로 트룰리치나.webp',
+      'brainrot_image/트리피 트로피1.webp',
+      'brainrot_image/트리피 트로피2.webp',
+      'brainrot_image/트릭 트랙 바라붐.webp',
+      'brainrot_image/티그룰리 그레이프루투니.webp',
+      'brainrot_image/티그룰리니 워터멜리니.webp',
+      'brainrot_image/팟 핫스팟.webp',
+      'brainrot_image/프룰리 프룰라.webp',
+      'brainrot_image/프리고 카멜로.webp',
+    ];
+    await prefs.setStringList('collected_characters', allCharacters);
+    print('치트: 브레인롯 캐릭터 도감 100% 획득 (${allCharacters.length}개)');
+  }
+
+  Future<void> _unlockMinecraft100() async {
+    final prefs = await SharedPreferences.getInstance();
+    final List<String> allMobs = [
+      'minecraft_image/가디언.webp',
+      'minecraft_image/가스트.jpg',
+      'minecraft_image/난폭한 피글린.webp',
+      'minecraft_image/마그마 큐브.webp',
+      'minecraft_image/마녀.webp',
+      'minecraft_image/벡스.png',
+      'minecraft_image/변명자.webp',
+      'minecraft_image/보그드.webp',
+      'minecraft_image/복어.jpg',
+      'minecraft_image/브리즈.webp',
+      'minecraft_image/블레이즈.jpg',
+      'minecraft_image/셜커.webp',
+      'minecraft_image/소환사.webp',
+      'minecraft_image/스켈레톤.webp',
+      'minecraft_image/스켈레톤 기병.webp',
+      'minecraft_image/스트레이.webp',
+      'minecraft_image/스파이더 조키.jpg',
+      'minecraft_image/슬라임.webp',
+      'minecraft_image/아기 피글린.webp',
+      'minecraft_image/약탈자.webp',
+      'minecraft_image/엔더마이트.jpg',
+      'minecraft_image/엘더 가디언.webp',
+      'minecraft_image/워든.jpg',
+      'minecraft_image/위더 스켈레톤.webp',
+      'minecraft_image/익사자.webp',
+      'minecraft_image/조글린.webp',
+      'minecraft_image/좀벌레.jpg',
+      'minecraft_image/좀비.webp',
+      'minecraft_image/좀비 주민.jpg',
+      'minecraft_image/좀비 피글린.webp',
+      'minecraft_image/충전된 크리퍼.webp',
+      'minecraft_image/치킨 조키.jpg',
+      'minecraft_image/크리킹.webp',
+      'minecraft_image/크리퍼.webp',
+      'minecraft_image/파괴수.webp',
+      'minecraft_image/팬텀.jpg',
+      'minecraft_image/피글린.webp',
+      'minecraft_image/허스크.webp',
+      'minecraft_image/호글린.webp',
+      'minecraft_image/환술사.webp',
+    ];
+    await prefs.setStringList('collected_mobs', allMobs);
+    print('치트: 마인크래프트 몹 도감 100% 획득 (${allMobs.length}개)');
+  }
+
+  Future<void> _unlockSpecial100() async {
+    final prefs = await SharedPreferences.getInstance();
+    final allSpecial = await loadSpecialCharacterImagesFromCsv();
+    await prefs.setStringList('collected_special', allSpecial);
+    final levels = {for (final p in allSpecial) p: 1};
+    await prefs.setString('special_levels', jsonEncode(levels));
+    print('치트: 스페셜 캐릭터 도감 100% 획득 (${allSpecial.length}개, 레벨 1)');
   }
 
   @override

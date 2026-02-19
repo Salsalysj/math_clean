@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/services.dart';
@@ -8,6 +9,7 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 import 'package:flutter/rendering.dart';
+import 'package:math_game_clean/special_characters.dart';
 
 // 마인크래프트 몹 정보 클래스
 class MobInfo {
@@ -450,6 +452,10 @@ class CollectionScreen extends StatefulWidget {
 class _CollectionScreenState extends State<CollectionScreen> with SingleTickerProviderStateMixin {
   List<String> collectedCharacters = [];
   List<String> collectedMobs = [];
+  List<String> collectedSpecial = [];
+  List<String> allSpecial = []; // special_mobs.csv에서 로드
+  Map<String, SpecialInfo> specialInfoMap = {}; // 이미지 경로 → 스페셜 카드 정보
+  Map<String, int> specialLevels = {}; // 이미지 경로 → 레벨 (1~5)
   late TabController _tabController;
   
   // 전체 캐릭터 목록
@@ -549,9 +555,19 @@ class _CollectionScreenState extends State<CollectionScreen> with SingleTickerPr
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 2, vsync: this);
+    _tabController = TabController(length: 3, vsync: this);
     allMobs.addAll(getMobImages());
     loadCollectedData();
+    _loadSpecialFromCsv();
+  }
+
+  Future<void> _loadSpecialFromCsv() async {
+    final list = await loadSpecialCharacterImagesFromCsv();
+    final infoMap = await loadSpecialCharacterInfoFromCsv();
+    if (mounted) setState(() {
+      allSpecial = list;
+      specialInfoMap = infoMap;
+    });
   }
 
   @override
@@ -562,9 +578,21 @@ class _CollectionScreenState extends State<CollectionScreen> with SingleTickerPr
 
   Future<void> loadCollectedData() async {
     final prefs = await SharedPreferences.getInstance();
+    Map<String, int> levels = {};
+    try {
+      final json = prefs.getString('special_levels');
+      if (json != null && json.isNotEmpty) {
+        final map = jsonDecode(json) as Map<String, dynamic>?;
+        if (map != null) {
+          levels = map.map((k, v) => MapEntry(k, (v is int ? v : int.tryParse(v.toString()) ?? 1).clamp(1, 5)));
+        }
+      }
+    } catch (_) {}
     setState(() {
       collectedCharacters = prefs.getStringList('collected_characters') ?? [];
       collectedMobs = prefs.getStringList('collected_mobs') ?? [];
+      collectedSpecial = prefs.getStringList('collected_special') ?? [];
+      specialLevels = levels;
     });
   }
 
@@ -587,6 +615,26 @@ class _CollectionScreenState extends State<CollectionScreen> with SingleTickerPr
         .last
         .replaceAll('.webp', '')
         .replaceAll('brainrot_image/', '');
+  }
+
+  /// 스페셜 캐릭터 이미지: .png 우선, 없으면 .webp
+  Widget _buildSpecialImage(String imagePath, {BoxFit fit = BoxFit.contain, double? width, double? height}) {
+    final webpPath = imagePath.replaceFirst('.png', '.webp');
+    return Image.asset(
+      imagePath,
+      fit: fit,
+      width: width,
+      height: height,
+      errorBuilder: (_, __, ___) {
+        return Image.asset(
+          webpPath,
+          fit: fit,
+          width: width,
+          height: height,
+          errorBuilder: (_, __, ___) => Icon(Icons.image_not_supported, size: height != null ? height * 0.4 : 80, color: Colors.grey[400]),
+        );
+      },
+    );
   }
 
   // 몹 이미지를 로드하는 위젯 (확장자 자동 시도)
@@ -731,6 +779,7 @@ class _CollectionScreenState extends State<CollectionScreen> with SingleTickerPr
           tabs: const [
             Tab(text: '브레인롯 캐릭터'),
             Tab(text: '마인크래프트 몹'),
+            Tab(text: '스페셜 캐릭터'),
           ],
         ),
       ),
@@ -739,6 +788,7 @@ class _CollectionScreenState extends State<CollectionScreen> with SingleTickerPr
         children: [
           _buildBrainrotTab(),
           _buildMinecraftTab(),
+          _buildSpecialTab(),
         ],
       ),
     );
@@ -1451,6 +1501,283 @@ class _CollectionScreenState extends State<CollectionScreen> with SingleTickerPr
                   );
                 },
               ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // 스페셜 캐릭터 탭 (special_image / special_mobs.csv)
+  Widget _buildSpecialTab() {
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(15),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.grey.withOpacity(0.3),
+                    spreadRadius: 2,
+                    blurRadius: 5,
+                    offset: const Offset(0, 3),
+                  ),
+                ],
+              ),
+              child: Column(
+                children: [
+                  Text(
+                    '스페셜 수집 진행률',
+                    style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                      fontWeight: FontWeight.bold,
+                      color: Colors.amber[800],
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  LinearProgressIndicator(
+                    value: allSpecial.isEmpty ? 0 : collectedSpecial.length / allSpecial.length,
+                    backgroundColor: Colors.grey[300],
+                    valueColor: AlwaysStoppedAnimation<Color>(Colors.amber[700]!),
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    allSpecial.isEmpty
+                        ? '0% 완료'
+                        : '${(collectedSpecial.length / allSpecial.length * 100).toStringAsFixed(1)}% 완료',
+                    style: TextStyle(
+                      color: Colors.amber[700],
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 5),
+                  Text(
+                    '${collectedSpecial.length}/${allSpecial.length} (브레인 에너지 20칸 시 획득)',
+                    style: TextStyle(
+                      color: Colors.amber[800],
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 20),
+            Expanded(
+              child: allSpecial.isEmpty
+                  ? Center(
+                      child: Text(
+                        '스페셜 캐릭터가 없습니다.\nspecial_image 폴더를 확인해 주세요.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: Colors.grey[600]),
+                      ),
+                    )
+                  : GridView.builder(
+                      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: 3,
+                        childAspectRatio: 0.8,
+                        crossAxisSpacing: 10,
+                        mainAxisSpacing: 10,
+                      ),
+                      itemCount: allSpecial.length,
+                      itemBuilder: (context, index) {
+                        final imagePath = allSpecial[index];
+                        final isCollected = collectedSpecial.contains(imagePath);
+                        final name = imagePath
+                            .replaceFirst('special_image/', '')
+                            .replaceAll('.webp', '')
+                            .replaceAll('.png', '')
+                            .replaceAll('.jpg', '');
+                        return GestureDetector(
+                          onTap: isCollected
+                              ? () {
+                                  final info = specialInfoMap[imagePath];
+                                  final displayName = info?.name ?? name;
+                                  showDialog(
+                                    context: context,
+                                    builder: (dialogContext) {
+                                      final specialDialogKey = GlobalKey();
+                                      return Dialog(
+                                        insetPadding: const EdgeInsets.all(20),
+                                        child: Container(
+                                          width: double.maxFinite,
+                                          padding: const EdgeInsets.all(20),
+                                          child: SingleChildScrollView(
+                                            child: Column(
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                                RepaintBoundary(
+                                                  key: specialDialogKey,
+                                                  child: Column(
+                                                    mainAxisSize: MainAxisSize.min,
+                                                    children: [
+                                                      Text(
+                                                        '⭐ $displayName',
+                                                        style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                                                              fontWeight: FontWeight.bold,
+                                                              color: Colors.amber[800],
+                                                            ),
+                                                        textAlign: TextAlign.center,
+                                                      ),
+                                                      const SizedBox(height: 16),
+                                                      _buildSpecialImage(imagePath, fit: BoxFit.contain, height: 200),
+                                                      if (info != null) ...[
+                                                        const SizedBox(height: 16),
+                                                        Container(
+                                                          padding: const EdgeInsets.all(15),
+                                                          decoration: BoxDecoration(
+                                                            color: Colors.amber[50],
+                                                            borderRadius: BorderRadius.circular(12),
+                                                            border: Border.all(color: Colors.amber[200]!),
+                                                          ),
+                                                          child: Column(
+                                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                                            children: [
+                                                              Text(
+                                                                '📊 스페셜 정보',
+                                                                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                                                                  color: Colors.amber[800],
+                                                                  fontWeight: FontWeight.bold,
+                                                                ),
+                                                              ),
+                                                              const SizedBox(height: 6),
+                                                              Text(
+                                                                '레벨 ${specialLevels[imagePath] ?? 1}',
+                                                                style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.amber[800]),
+                                                              ),
+                                                              const SizedBox(height: 10),
+                                                              Row(
+                                                                children: [
+                                                                  const Text('⚔️ 공격력: ', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
+                                                                  Text(info.attackPower, style: const TextStyle(fontSize: 14)),
+                                                                ],
+                                                              ),
+                                                              const SizedBox(height: 6),
+                                                              Row(
+                                                                children: [
+                                                                  const Text('❤️ 생명력: ', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
+                                                                  Text(info.health, style: const TextStyle(fontSize: 14)),
+                                                                ],
+                                                              ),
+                                                              if (info.specialAbility.isNotEmpty) ...[
+                                                                const SizedBox(height: 6),
+                                                                Row(
+                                                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                                                  children: [
+                                                                    const Text('✨ 특수능력: ', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
+                                                                    Expanded(child: Text(info.specialAbility, style: const TextStyle(fontSize: 14))),
+                                                                  ],
+                                                                ),
+                                                              ],
+                                                              if (info.dropItems.isNotEmpty) ...[
+                                                                const SizedBox(height: 10),
+                                                                Text('🎁 드롭 아이템:', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.amber[800])),
+                                                                const SizedBox(height: 4),
+                                                                Container(
+                                                                  padding: const EdgeInsets.all(10),
+                                                                  decoration: BoxDecoration(
+                                                                    color: Colors.amber[100],
+                                                                    borderRadius: BorderRadius.circular(8),
+                                                                    border: Border.all(color: Colors.amber[200]!),
+                                                                  ),
+                                                                  child: Text(info.dropItems, style: TextStyle(fontSize: 13, color: Colors.amber[800])),
+                                                                ),
+                                                              ],
+                                                            ],
+                                                          ),
+                                                        ),
+                                                      ],
+                                                    ],
+                                                  ),
+                                                ),
+                                                const SizedBox(height: 15),
+                                                ElevatedButton.icon(
+                                                  onPressed: () => captureAndSaveCharacterInfo(specialDialogKey, displayName),
+                                                  icon: const Icon(Icons.save_alt),
+                                                  label: const Text('스페셜 정보 저장'),
+                                                  style: ElevatedButton.styleFrom(
+                                                    backgroundColor: Colors.amber[700],
+                                                    foregroundColor: Colors.white,
+                                                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                                                  ),
+                                                ),
+                                                const SizedBox(height: 8),
+                                                ElevatedButton(
+                                                  onPressed: () => Navigator.pop(dialogContext),
+                                                  child: const Text('닫기'),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ),
+                                      );
+                                    },
+                                  );
+                                }
+                              : null,
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(12),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.grey.withOpacity(0.3),
+                                  spreadRadius: 1,
+                                  blurRadius: 3,
+                                  offset: const Offset(0, 2),
+                                ),
+                              ],
+                            ),
+                            child: Column(
+                              children: [
+                                Expanded(
+                                  child: ClipRRect(
+                                    borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
+                                    child: isCollected
+                                        ? _buildSpecialImage(imagePath, fit: BoxFit.contain, width: double.infinity)
+                                        : Container(
+                                            color: Colors.grey[400],
+                                            child: Icon(Icons.lock_outline, size: 40, color: Colors.grey[600]),
+                                          ),
+                                  ),
+                                ),
+                                Container(
+                                  padding: const EdgeInsets.all(8),
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Text(
+                                        isCollected ? name : '???',
+                                        style: TextStyle(
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.bold,
+                                          color: isCollected ? Colors.amber[800] : Colors.grey[600],
+                                        ),
+                                        textAlign: TextAlign.center,
+                                        maxLines: 2,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                      if (isCollected && (specialLevels[imagePath] ?? 0) > 0)
+                                        Padding(
+                                          padding: const EdgeInsets.only(top: 2),
+                                          child: Text(
+                                            '레벨 ${specialLevels[imagePath] ?? 1}',
+                                            style: TextStyle(fontSize: 10, color: Colors.amber[700], fontWeight: FontWeight.bold),
+                                          ),
+                                        ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                    ),
             ),
           ],
         ),

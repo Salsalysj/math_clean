@@ -3,6 +3,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:async';
 import 'quiz_screen.dart';
 import 'collection_screen.dart';
+import 'package:math_game_clean/route_observer.dart';
+import 'package:math_game_clean/pity_state.dart' as pity_state;
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({Key? key}) : super(key: key);
@@ -11,8 +13,10 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen> with RouteAware {
   int keys = 5; // 열쇠 개수
+  int pityGauge = 0; // 수집 게이지 0~100 (중복 시 +20%, 100%면 다음 보상 신규 보장)
+  int brainEnergy = 0; // 브레인 에너지 0~20 (만점 시 +1, 20이면 스페셜 캐릭터 획득)
   Timer? _timer;
   String timeUntilNextKey = '';
   
@@ -20,22 +24,63 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     loadKeys();
+    loadPityGauge();
+    loadBrainEnergy();
     checkKeyRecharge();
     _startTimer();
   }
 
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    routeObserver.unsubscribe(this);
+    final route = ModalRoute.of(context);
+    if (route is ModalRoute<void> && route.isCurrent) {
+      routeObserver.subscribe(this, route);
+    }
+  }
 
-  
   @override
   void dispose() {
+    routeObserver.unsubscribe(this);
     _timer?.cancel();
     super.dispose();
   }
+
+  /// 메인 화면이 다시 보일 때(보상에서 돌아올 때 등) 열쇠·수집 게이지 즉시 새로고침
+  @override
+  void didPopNext() {
+    loadKeys();
+    loadPityGauge();
+    loadBrainEnergy();
+  }
+  
+  Future<void> loadBrainEnergy() async {
+    final prefs = await SharedPreferences.getInstance();
+    final value = prefs.getInt('brain_energy') ?? 0;
+    if (!mounted) return;
+    setState(() {
+      brainEnergy = value.clamp(0, 20);
+    });
+  }
+  
+  Future<void> loadPityGauge() async {
+    final prefs = await SharedPreferences.getInstance();
+    final value = prefs.getInt('pity_gauge') ?? 0;
+    if (!mounted) return;
+    setState(() {
+      pityGauge = value;
+    });
+  }
+
+
   
   Future<void> loadKeys() async {
     final prefs = await SharedPreferences.getInstance();
+    final value = prefs.getInt('keys') ?? 5;
+    if (!mounted) return;
     setState(() {
-      keys = prefs.getInt('keys') ?? 5;
+      keys = value;
     });
   }
   
@@ -51,8 +96,8 @@ class _HomeScreenState extends State<HomeScreen> {
     final now = DateTime.now().millisecondsSinceEpoch;
     final timeDiff = now - lastKeyTime;
     
-    // 24시간 = 24 * 60 * 60 * 1000 = 86,400,000 밀리초
-    const keyRechargeTime = 24 * 60 * 60 * 1000;
+    // 6시간 = 6 * 60 * 60 * 1000 = 21,600,000 밀리초
+    const keyRechargeTime = 6 * 60 * 60 * 1000;
     
     if (keys < 5 && timeDiff >= keyRechargeTime) {
       final keysToAdd = (timeDiff ~/ keyRechargeTime).clamp(0, 5 - keys);
@@ -80,7 +125,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
     
     final prefs = await SharedPreferences.getInstance();
-    const keyRechargeTime = 24 * 60 * 60 * 1000; // 24시간
+    const keyRechargeTime = 6 * 60 * 60 * 1000; // 6시간
     final lastKeyTime = prefs.getInt('last_key_time') ?? DateTime.now().millisecondsSinceEpoch;
     final now = DateTime.now().millisecondsSinceEpoch;
     
@@ -123,7 +168,7 @@ class _HomeScreenState extends State<HomeScreen> {
           content: const Text(
             '열쇠가 없어도 문제를 풀 수 있습니다.\n\n'
             '하지만 보상을 획득하려면 열쇠가 필요합니다.\n'
-            '열쇠는 24시간마다 하나씩 충전됩니다.\n\n'
+            '열쇠는 6시간마다 하나씩 충전됩니다.\n\n'
             '게임을 계속 진행하시겠습니까?'
           ),
           actions: [
@@ -153,17 +198,29 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     );
     
-    // 게임에서 돌아왔을 때 열쇠 개수 다시 로드
+    // 게임에서 돌아왔을 때 열쇠·수집 게이지·브레인 에너지 다시 로드
     await loadKeys();
+    await loadPityGauge();
+    await loadBrainEnergy();
   }
 
   @override
   Widget build(BuildContext context) {
-    // 매 build마다 다음 프레임에서 열쇠 상태 업데이트
+    // 보상 화면에서 설정해 둔 수집 게이지가 있으면 즉시 반영 (새로고침 없이)
+    if (pity_state.pendingPityGauge != null) {
+      final value = pity_state.pendingPityGauge!;
+      pity_state.pendingPityGauge = null;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) setState(() => pityGauge = value);
+      });
+    }
+    // 매 build마다 다음 프레임에서 열쇠·수집 게이지·브레인 에너지 업데이트
     WidgetsBinding.instance.addPostFrameCallback((_) {
       loadKeys();
+      loadPityGauge();
+      loadBrainEnergy();
     });
-    
+
     return Scaffold(
       backgroundColor: Colors.lightBlue[50],
       body: SafeArea(
@@ -224,7 +281,139 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ),
               
-              const SizedBox(height: 30),
+              const SizedBox(height: 20),
+              
+              // 수집 게이지 (중복 시 +20%, 100%면 다음 보상 신규 보장)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                margin: const EdgeInsets.symmetric(horizontal: 20),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(15),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.grey.withOpacity(0.3),
+                      spreadRadius: 2,
+                      blurRadius: 5,
+                      offset: const Offset(0, 3),
+                    ),
+                  ],
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.auto_awesome, color: Colors.purple[600], size: 20),
+                        const SizedBox(width: 6),
+                        Text(
+                          '수집 게이지',
+                          style: TextStyle(
+                            color: Colors.grey[800],
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: LinearProgressIndicator(
+                        value: pityGauge / 100,
+                        minHeight: 14,
+                        backgroundColor: Colors.grey[300],
+                        valueColor: AlwaysStoppedAnimation<Color>(
+                          pityGauge >= 100 ? Colors.purple : Colors.purple[400]!,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      pityGauge >= 100
+                          ? '다음 보상: 신규 카드 보장!'
+                          : '$pityGauge% (중복 시 +20%)',
+                      style: TextStyle(
+                        color: Colors.grey[600],
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              
+              const SizedBox(height: 20),
+              
+              // 브레인 에너지 (만점 시 +1, 20칸이면 스페셜 캐릭터 획득)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                margin: const EdgeInsets.symmetric(horizontal: 20),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(15),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.grey.withOpacity(0.3),
+                      spreadRadius: 2,
+                      blurRadius: 5,
+                      offset: const Offset(0, 3),
+                    ),
+                  ],
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.psychology, color: Colors.amber[700], size: 20),
+                        const SizedBox(width: 6),
+                        Text(
+                          '브레인 에너지',
+                          style: TextStyle(
+                            color: Colors.grey[800],
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: List.generate(20, (i) {
+                        final filled = i < brainEnergy;
+                        return Container(
+                          width: 14,
+                          height: 14,
+                          margin: const EdgeInsets.symmetric(horizontal: 1),
+                          decoration: BoxDecoration(
+                            color: filled ? Colors.amber[600] : Colors.grey[300],
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                              color: filled ? Colors.amber[800]! : Colors.grey[400]!,
+                              width: 1,
+                            ),
+                          ),
+                        );
+                      }),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      brainEnergy >= 20
+                          ? '스페셜 캐릭터 획득 가능!'
+                          : '$brainEnergy/20 (10점 만점 시 +1)',
+                      style: TextStyle(
+                        color: Colors.grey[600],
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              
+              const SizedBox(height: 24),
               
               // 게임 시작 버튼 (열쇠 없어도 가능)
               ElevatedButton(
@@ -302,7 +491,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   child: Column(
                     children: [
                       Text(
-                        '열쇠는 24시간마다 하나씩 충전됩니다',
+                        '열쇠는 6시간마다 하나씩 충전됩니다',
                         style: TextStyle(
                           color: Colors.grey[700],
                           fontSize: 14,

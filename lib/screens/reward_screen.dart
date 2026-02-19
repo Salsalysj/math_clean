@@ -1,5 +1,8 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'dart:math';
+import 'package:math_game_clean/pity_state.dart' as pity_state;
+import 'package:math_game_clean/special_characters.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/services.dart';
 import 'package:gal/gal.dart';
@@ -444,8 +447,10 @@ class CharacterDatabase {
 class RewardScreen extends StatefulWidget {
   final int score;
   final bool hasKeys;
+  /// 치트 111119: true면 브레인 에너지 없이 스페셜 캐릭터 보상만 지급
+  final bool forceSpecialReward;
   
-  const RewardScreen({Key? key, required this.score, this.hasKeys = true}) : super(key: key);
+  const RewardScreen({Key? key, required this.score, this.hasKeys = true, this.forceSpecialReward = false}) : super(key: key);
 
   @override
   State<RewardScreen> createState() => _RewardScreenState();
@@ -461,6 +466,9 @@ class _RewardScreenState extends State<RewardScreen> {
   int totalCharacters = 41;
   int collectedCount = 0;
   bool isMinecraftMob = false; // false: 브레인롯, true: 마인크래프트
+  bool isSpecialCharacter = false; // true: 이번 보상이 스페셜 캐릭터 (브레인 에너지 20 보장)
+  SpecialInfo? selectedSpecialInfo; // 스페셜 보상 시 CSV 기반 카드 정보
+  int selectedSpecialLevel = 1; // 스페셜 보상 시 도감 표시용 레벨 (1~5)
   
   // brainrot_image 폴더의 이미지 파일들
   final List<String> rewardImages = [
@@ -601,22 +609,93 @@ class _RewardScreenState extends State<RewardScreen> {
   }
 
   Future<void> _initializeReward() async {
-    // 랜덤으로 브레인롯 또는 마인크래프트 몹 선택
+    final prefs = await SharedPreferences.getInstance();
+    // 치트 111119: 만점 + 스페셜 보상 (브레인 에너지 소모 없음)
+    if (widget.forceSpecialReward) {
+      await _grantSpecialAsReward(consumeBrainEnergy: false);
+      useKeyDirectly();
+      return;
+    }
+    // 브레인 에너지가 이미 20인 경우 → 이번 회차 보상은 반드시 스페셜 캐릭터 (다음 번 보상)
+    if ((prefs.getInt('brain_energy') ?? 0) == 20) {
+      await _grantSpecialAsReward(consumeBrainEnergy: true);
+      useKeyDirectly();
+      return;
+    }
+    // 그 외: 브레인롯 또는 마인크래프트 몹 선택
     final random = Random();
     isMinecraftMob = random.nextBool(); // 50% 확률
-    
     if (isMinecraftMob) {
-      // 마인크래프트 몹
       await selectRandomMob();
       await saveMobToCollection();
     } else {
-      // 브레인롯 캐릭터
       await selectRandomImage();
       await saveCharacterToCollection();
     }
-    // 8점 이상일 때만 열쇠 차감
-    print('직접 열쇠 차감 시도...');
+    await _processBrainEnergy();
     useKeyDirectly();
+  }
+
+  static const int _specialMaxLevel = 5;
+
+  /// special_levels JSON 로드: { "path": level (1~5) }
+  static Future<Map<String, int>> _loadSpecialLevels(SharedPreferences prefs) async {
+    try {
+      final json = prefs.getString('special_levels');
+      if (json == null || json.isEmpty) return {};
+      final map = jsonDecode(json) as Map<String, dynamic>?;
+      if (map == null) return {};
+      return map.map((k, v) => MapEntry(k, (v is int ? v : int.tryParse(v.toString()) ?? 1).clamp(1, _specialMaxLevel)));
+    } catch (_) {
+      return {};
+    }
+  }
+
+  static Future<void> _saveSpecialLevels(SharedPreferences prefs, Map<String, int> levels) async {
+    await prefs.setString('special_levels', jsonEncode(levels));
+  }
+
+  /// 이번 보상을 스페셜 캐릭터로 지급 (최초 1, 중복 시 +1, 최대 5). [consumeBrainEnergy] true면 브레인 에너지 0으로 소모.
+  Future<void> _grantSpecialAsReward({bool consumeBrainEnergy = true}) async {
+    final prefs = await SharedPreferences.getInstance();
+    final collected = prefs.getStringList('collected_special') ?? [];
+    final levels = await _loadSpecialLevels(prefs);
+    final allSpecial = await loadSpecialCharacterImagesFromCsv();
+    final infoMap = await loadSpecialCharacterInfoFromCsv();
+    final uncollected = allSpecial.where((e) => !collected.contains(e)).toList();
+    String picked;
+    if (uncollected.isNotEmpty) {
+      picked = uncollected[Random().nextInt(uncollected.length)];
+      collected.add(picked);
+      levels[picked] = 1;
+      await prefs.setStringList('collected_special', collected);
+    } else {
+      picked = allSpecial.isNotEmpty ? allSpecial[Random().nextInt(allSpecial.length)] : '';
+      if (picked.isNotEmpty) {
+        levels[picked] = ((levels[picked] ?? 1) + 1).clamp(1, _specialMaxLevel);
+      }
+    }
+    await _saveSpecialLevels(prefs, levels);
+    if (consumeBrainEnergy) await prefs.setInt('brain_energy', 0);
+    if (!mounted) return;
+    setState(() {
+      isSpecialCharacter = true;
+      selectedImage = picked;
+      selectedSpecialInfo = infoMap[picked];
+      selectedSpecialLevel = levels[picked] ?? 1;
+      collectedCount = collected.length;
+      totalCharacters = allSpecial.isEmpty ? 1 : allSpecial.length;
+      isAllCollected = allSpecial.isNotEmpty && collected.length >= allSpecial.length;
+    });
+    print('스페셜 캐릭터 보상 획득: $picked 레벨 ${levels[picked]}${consumeBrainEnergy ? ' (브레인 에너지 20 사용)' : ' (치트)'}');
+  }
+
+  Future<void> _processBrainEnergy() async {
+    if (widget.score != 10) return; // 만점일 때만
+    final prefs = await SharedPreferences.getInstance();
+    int energy = (prefs.getInt('brain_energy') ?? 0).clamp(0, 20);
+    energy = (energy + 1).clamp(0, 20); // 20까지 채움, 다음 회차에 스페셜 지급
+    await prefs.setInt('brain_energy', energy);
   }
 
   Future<void> useKeyDirectly() async {
@@ -641,26 +720,38 @@ class _RewardScreenState extends State<RewardScreen> {
     final random = Random();
     final prefs = await SharedPreferences.getInstance();
     List<String> collectedCharacters = prefs.getStringList('collected_characters') ?? [];
+    int pity = prefs.getInt('pity_gauge') ?? 0;
     
     // 미수집 캐릭터 목록 계산
     List<String> uncollectedCharacters = rewardImages
         .where((character) => !collectedCharacters.contains(character))
         .toList();
     
+    String pickedImage;
+    int newPity;
+    
+    // 수집 게이지 100%: 다음 보상은 반드시 신규 (미수집이 있을 때만)
+    if (pity >= 100 && uncollectedCharacters.isNotEmpty) {
+      pickedImage = uncollectedCharacters[random.nextInt(uncollectedCharacters.length)];
+      newPity = 0;
+      print('수집 게이지 100% 발동: 신규 캐릭터 보장');
+    } else {
+      pickedImage = rewardImages[random.nextInt(rewardImages.length)];
+      if (pity >= 100) {
+        newPity = 0; // 이미 전부 수집된 경우에도 수집 게이지 소모
+      } else {
+        // 중복 여부·게이지 갱신은 보상 수령 시점(saveCharacterToCollection)에서 처리
+        newPity = pity;
+      }
+    }
+    
+    await prefs.setInt('pity_gauge', newPity);
+    pity_state.pendingPityGauge = newPity; // 메인 복귀 시 즉시 반영
+
     setState(() {
       collectedCount = collectedCharacters.length;
       isAllCollected = uncollectedCharacters.isEmpty;
-      
-      if (uncollectedCharacters.isNotEmpty) {
-        // 비복원추출: 미수집 캐릭터 중에서만 선택
-        selectedImage = uncollectedCharacters[random.nextInt(uncollectedCharacters.length)];
-        print('비복원추출 모드: 미수집 캐릭터 ${uncollectedCharacters.length}개 중에서 선택');
-      } else {
-        // 복원추출: 도감 100% 달성 시 전체 캐릭터에서 선택
-        selectedImage = rewardImages[random.nextInt(rewardImages.length)];
-        print('복원추출 모드: 도감 100% 달성으로 전체 캐릭터에서 선택');
-      }
-      
+      selectedImage = pickedImage;
       String characterName = getCharacterName(selectedImage);
       selectedCharacterInfo = CharacterDatabase.getCharacterInfo(characterName);
       print('선택된 캐릭터: $characterName');
@@ -678,20 +769,32 @@ class _RewardScreenState extends State<RewardScreen> {
         .where((mob) => !collectedMobs.contains(mob))
         .toList();
     
+    int pity = prefs.getInt('pity_gauge') ?? 0;
+    String pickedImage;
+    int newPity;
+    
+    // 수집 게이지 100%: 다음 보상은 반드시 신규 (미수집이 있을 때만)
+    if (pity >= 100 && uncollectedMobs.isNotEmpty) {
+      pickedImage = uncollectedMobs[random.nextInt(uncollectedMobs.length)];
+      newPity = 0;
+      print('수집 게이지 100% 발동: 신규 몹 보장');
+    } else {
+      pickedImage = allMobImages[random.nextInt(allMobImages.length)];
+      if (pity >= 100) {
+        newPity = 0; // 이미 전부 수집된 경우에도 수집 게이지 소모
+      } else {
+        // 중복 여부·게이지 갱신은 보상 수령 시점(saveMobToCollection)에서 처리
+        newPity = pity;
+      }
+    }
+    
+    await prefs.setInt('pity_gauge', newPity);
+    pity_state.pendingPityGauge = newPity; // 메인 복귀 시 즉시 반영
+
     setState(() {
       collectedCount = collectedMobs.length;
       isAllCollected = uncollectedMobs.isEmpty;
-      
-      if (uncollectedMobs.isNotEmpty) {
-        // 비복원추출: 미수집 몹 중에서만 선택
-        selectedImage = uncollectedMobs[random.nextInt(uncollectedMobs.length)];
-        print('비복원추출 모드: 미수집 몹 ${uncollectedMobs.length}개 중에서 선택');
-      } else {
-        // 복원추출: 도감 100% 달성 시 전체 몹에서 선택
-        selectedImage = allMobImages[random.nextInt(allMobImages.length)];
-        print('복원추출 모드: 도감 100% 달성으로 전체 몹에서 선택');
-      }
-      
+      selectedImage = pickedImage;
       String mobName = getMobName(selectedImage);
       selectedMobInfo = MobDatabase.getMobInfo(mobName);
       totalCharacters = allMobImages.length;
@@ -713,26 +816,48 @@ class _RewardScreenState extends State<RewardScreen> {
   }
 
   Future<void> saveCharacterToCollection() async {
-    if (selectedImage.isNotEmpty) {
-      final prefs = await SharedPreferences.getInstance();
-      List<String> collectedCharacters = prefs.getStringList('collected_characters') ?? [];
-      
-      if (!collectedCharacters.contains(selectedImage)) {
-        collectedCharacters.add(selectedImage);
-        await prefs.setStringList('collected_characters', collectedCharacters);
-      }
+    if (selectedImage.isEmpty) return;
+    final prefs = await SharedPreferences.getInstance();
+    List<String> collectedCharacters = prefs.getStringList('collected_characters') ?? [];
+    final isDuplicate = collectedCharacters.contains(selectedImage);
+
+    // 보상 수령 시점에 중복이면 수집 게이지 +20% (타이밍 맞춤)
+    if (isDuplicate) {
+      final pity = prefs.getInt('pity_gauge') ?? 0;
+      final newPity = (pity + 20).clamp(0, 100);
+      await prefs.setInt('pity_gauge', newPity);
+      pity_state.pendingPityGauge = newPity; // 메인 복귀 시 즉시 반영
+      print('보상 수령(중복 캐릭터) → 수집 게이지 $pity% → $newPity%');
+    } else {
+      // 새 캐릭터 획득 시 수집 게이지 초기화
+      collectedCharacters.add(selectedImage);
+      await prefs.setStringList('collected_characters', collectedCharacters);
+      await prefs.setInt('pity_gauge', 0);
+      pity_state.pendingPityGauge = 0;
+      print('보상 수령(신규 캐릭터) → 수집 게이지 0%로 초기화');
     }
   }
 
   Future<void> saveMobToCollection() async {
-    if (selectedImage.isNotEmpty) {
-      final prefs = await SharedPreferences.getInstance();
-      List<String> collectedMobs = prefs.getStringList('collected_mobs') ?? [];
-      
-      if (!collectedMobs.contains(selectedImage)) {
-        collectedMobs.add(selectedImage);
-        await prefs.setStringList('collected_mobs', collectedMobs);
-      }
+    if (selectedImage.isEmpty) return;
+    final prefs = await SharedPreferences.getInstance();
+    List<String> collectedMobs = prefs.getStringList('collected_mobs') ?? [];
+    final isDuplicate = collectedMobs.contains(selectedImage);
+
+    // 보상 수령 시점에 중복이면 수집 게이지 +20% (타이밍 맞춤)
+    if (isDuplicate) {
+      final pity = prefs.getInt('pity_gauge') ?? 0;
+      final newPity = (pity + 20).clamp(0, 100);
+      await prefs.setInt('pity_gauge', newPity);
+      pity_state.pendingPityGauge = newPity; // 메인 복귀 시 즉시 반영
+      print('보상 수령(중복 몹) → 수집 게이지 $pity% → $newPity%');
+    } else {
+      // 새 몹 획득 시 수집 게이지 초기화
+      collectedMobs.add(selectedImage);
+      await prefs.setStringList('collected_mobs', collectedMobs);
+      await prefs.setInt('pity_gauge', 0);
+      pity_state.pendingPityGauge = 0;
+      print('보상 수령(신규 몹) → 수집 게이지 0%로 초기화');
     }
   }
 
@@ -816,7 +941,9 @@ class _RewardScreenState extends State<RewardScreen> {
       
       // 임시 파일 생성
       final tempDir = await getTemporaryDirectory();
-      final characterName = getCharacterName(selectedImage);
+      final characterName = isSpecialCharacter
+          ? (selectedSpecialInfo?.name ?? selectedImage.split('/').last.replaceAll(RegExp(r'\.(png|webp|jpg)$'), ''))
+          : getCharacterName(selectedImage);
       final fileName = '${characterName}_정보.png';
       final tempFile = File('${tempDir.path}/$fileName');
       await tempFile.writeAsBytes(pngBytes);
@@ -830,8 +957,10 @@ class _RewardScreenState extends State<RewardScreen> {
       // 성공 메시지
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('캐릭터 정보가 갤러리에 저장되었습니다!'),
+          SnackBar(
+            content: Text(isSpecialCharacter
+                ? '스페셜 정보가 갤러리에 저장되었습니다!'
+                : '캐릭터 정보가 갤러리에 저장되었습니다!'),
             backgroundColor: Colors.green,
           ),
         );
@@ -879,13 +1008,207 @@ class _RewardScreenState extends State<RewardScreen> {
     );
   }
 
-  // 보상 콘텐츠 (브레인롯 또는 마인크래프트)
+  // 보상 콘텐츠 (스페셜 / 브레인롯 / 마인크래프트)
   Widget _buildRewardContent() {
+    if (isSpecialCharacter) {
+      return _buildSpecialReward();
+    }
     if (isMinecraftMob) {
       return _buildMinecraftReward();
-    } else {
-      return _buildBrainrotReward();
     }
+    return _buildBrainrotReward();
+  }
+
+  /// 스페셜 캐릭터 보상 위젯 (.png 우선, 없으면 .webp) + CSV 기반 카드 정보
+  Widget _buildSpecialReward() {
+    if (selectedImage.isEmpty) {
+      return const Center(child: Text('스페셜 캐릭터를 불러오지 못했습니다.'));
+    }
+    final name = selectedSpecialInfo?.name ?? selectedImage
+        .replaceFirst('special_image/', '')
+        .replaceAll('.png', '')
+        .replaceAll('.webp', '');
+    final webpPath = selectedImage.replaceFirst('.png', '.webp');
+    return SingleChildScrollView(
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          children: [
+            Text(
+              '⭐ 스페셜 캐릭터 획득!',
+              style: Theme.of(context).textTheme.displayMedium?.copyWith(
+                color: Colors.amber[800],
+              ),
+            ),
+            if (hasEarnedCharacter) ...[
+              const SizedBox(height: 10),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.amber[100],
+                  borderRadius: BorderRadius.circular(15),
+                  border: Border.all(color: Colors.amber[300]!),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.psychology, size: 16, color: Colors.amber),
+                    const SizedBox(width: 6),
+                    Text(
+                      '스페셜: $collectedCount/$totalCharacters',
+                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.amber[800]),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+            const SizedBox(height: 15),
+            RepaintBoundary(
+              key: _repaintBoundaryKey,
+              child: Container(
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(20),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.grey.withOpacity(0.3),
+                      spreadRadius: 2,
+                      blurRadius: 5,
+                      offset: const Offset(0, 3),
+                    ),
+                  ],
+                ),
+                child: Column(
+                  children: [
+                    Text(
+                      name,
+                      style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                        color: Colors.amber[800],
+                        fontWeight: FontWeight.bold,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 15),
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(15),
+                      child: Image.asset(
+                        selectedImage,
+                        width: 300,
+                        height: 300,
+                        fit: BoxFit.contain,
+                        errorBuilder: (_, __, ___) {
+                          return Image.asset(
+                            webpPath,
+                            width: 300,
+                            height: 300,
+                            fit: BoxFit.contain,
+                            errorBuilder: (_, __, ___) => Icon(Icons.image_not_supported, size: 80, color: Colors.grey[400]),
+                          );
+                        },
+                      ),
+                    ),
+                    if (selectedSpecialInfo != null) ...[
+                      const SizedBox(height: 20),
+                      Container(
+                        padding: const EdgeInsets.all(15),
+                        decoration: BoxDecoration(
+                          color: Colors.amber[50],
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.amber[200]!),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              '📊 스페셜 정보',
+                              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                                color: Colors.amber[800],
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Row(
+                              children: [
+                                Text(
+                                  '레벨 $selectedSpecialLevel',
+                                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.amber[800]),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 12),
+                            Row(
+                              children: [
+                                const Text('⚔️ 공격력: ', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
+                                Text(selectedSpecialInfo!.attackPower, style: const TextStyle(fontSize: 14)),
+                              ],
+                            ),
+                            const SizedBox(height: 8),
+                            Row(
+                              children: [
+                                const Text('❤️ 생명력: ', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
+                                Text(selectedSpecialInfo!.health, style: const TextStyle(fontSize: 14)),
+                              ],
+                            ),
+                            if (selectedSpecialInfo!.specialAbility.isNotEmpty) ...[
+                              const SizedBox(height: 8),
+                              Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const Text('✨ 특수능력: ', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
+                                  Expanded(
+                                    child: Text(selectedSpecialInfo!.specialAbility, style: const TextStyle(fontSize: 14)),
+                                  ),
+                                ],
+                              ),
+                            ],
+                            if (selectedSpecialInfo!.dropItems.isNotEmpty) ...[
+                              const SizedBox(height: 12),
+                              Text(
+                                '🎁 드롭 아이템:',
+                                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.amber[700],
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Container(
+                                padding: const EdgeInsets.all(10),
+                                decoration: BoxDecoration(
+                                  color: Colors.amber[100],
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(color: Colors.amber[200]!),
+                                ),
+                                child: Text(
+                                  selectedSpecialInfo!.dropItems,
+                                  style: TextStyle(fontSize: 13, color: Colors.amber[800]),
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 15),
+            ElevatedButton.icon(
+              onPressed: captureAndSaveCharacterInfo,
+              icon: const Icon(Icons.save_alt),
+              label: const Text('스페셜 정보 저장'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.amber[700],
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   // 브레인롯 캐릭터 보상 위젯
@@ -925,8 +1248,8 @@ class _RewardScreenState extends State<RewardScreen> {
                     const SizedBox(width: 6),
                     Text(
                       isAllCollected 
-                          ? '🎉 도감 완성! (복원추출 모드)'
-                          : '📚 도감 진행: $collectedCount/$totalCharacters (신규 캐릭터 우선)',
+                          ? '🎉 도감 완성!'
+                          : '📚 도감 진행: $collectedCount/$totalCharacters (복원추출)',
                       style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.bold,
@@ -1142,7 +1465,7 @@ class _RewardScreenState extends State<RewardScreen> {
                   const SizedBox(width: 6),
                   Text(
                     isAllCollected 
-                        ? '🎉 도감 완성! (복원추출 모드)'
+                        ? '🎉 도감 완성!'
                         : '📚 도감 진행: $collectedCount/$totalCharacters (신규 몹 우선)',
                     style: TextStyle(
                       fontSize: 12,
@@ -1373,7 +1696,7 @@ class _RewardScreenState extends State<RewardScreen> {
                   const SizedBox(width: 8),
                   Flexible(
                     child: Text(
-                      '열쇠가 없어서 보상을 획득하지 못했습니다.\n열쇠는 24시간마다 하나씩 충전됩니다.',
+                      '열쇠가 없어서 보상을 획득하지 못했습니다.\n열쇠는 6시간마다 하나씩 충전됩니다.',
                       style: TextStyle(
                         fontSize: 13,
                         fontWeight: FontWeight.bold,
