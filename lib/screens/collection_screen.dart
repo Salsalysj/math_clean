@@ -443,7 +443,7 @@ class CharacterDatabase {
 }
 
 class CollectionScreen extends StatefulWidget {
-  const CollectionScreen({Key? key}) : super(key: key);
+  const CollectionScreen({super.key});
 
   @override
   State<CollectionScreen> createState() => _CollectionScreenState();
@@ -564,10 +564,12 @@ class _CollectionScreenState extends State<CollectionScreen> with SingleTickerPr
   Future<void> _loadSpecialFromCsv() async {
     final list = await loadSpecialCharacterImagesFromCsv();
     final infoMap = await loadSpecialCharacterInfoFromCsv();
-    if (mounted) setState(() {
+    if (mounted) {
+      setState(() {
       allSpecial = list;
       specialInfoMap = infoMap;
     });
+    }
   }
 
   @override
@@ -879,7 +881,7 @@ class _CollectionScreenState extends State<CollectionScreen> with SingleTickerPr
                             final GlobalKey dialogKey = GlobalKey();
                             return Dialog(
                               insetPadding: const EdgeInsets.all(20),
-                              child: Container(
+                              child: SizedBox(
                                 width: double.maxFinite,
                                 height: MediaQuery.of(context).size.height * 0.85,
                                 child: SingleChildScrollView(
@@ -1239,7 +1241,7 @@ class _CollectionScreenState extends State<CollectionScreen> with SingleTickerPr
                           final GlobalKey dialogKey = GlobalKey();
                           return Dialog(
                             insetPadding: const EdgeInsets.all(20),
-                            child: Container(
+                            child: SizedBox(
                               width: double.maxFinite,
                               height: MediaQuery.of(context).size.height * 0.85,
                               child: SingleChildScrollView(

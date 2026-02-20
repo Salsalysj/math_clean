@@ -43,3 +43,8 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Release keystore (보안 - Git에 올리지 않음)
+#*.jks
+#*.keystore
+#android/key.properties
