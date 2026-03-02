@@ -7,7 +7,7 @@ void main() {
 }
 
 class MathGameApp extends StatelessWidget {
-  const MathGameApp({Key? key}) : super(key: key);
+  const MathGameApp({super.key});
 
   @override
   Widget build(BuildContext context) {

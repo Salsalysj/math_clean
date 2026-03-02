@@ -7,7 +7,7 @@ import 'package:math_game_clean/route_observer.dart';
 import 'package:math_game_clean/pity_state.dart' as pity_state;
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({Key? key}) : super(key: key);
+  const HomeScreen({super.key});
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -92,8 +92,20 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   
   Future<void> checkKeyRecharge() async {
     final prefs = await SharedPreferences.getInstance();
-    final lastKeyTime = prefs.getInt('last_key_time') ?? 0;
     final now = DateTime.now().millisecondsSinceEpoch;
+    int? lastKeyTime = prefs.getInt('last_key_time');
+
+    // 타이머 기준 시각이 없는데 열쇠가 부족하면, 지금 시각으로 1회 초기화
+    if (keys < 5 && lastKeyTime == null) {
+      await prefs.setInt('last_key_time', now);
+      lastKeyTime = now;
+    }
+
+    if (lastKeyTime == null) {
+      _updateTimeUntilNextKey();
+      return;
+    }
+
     final timeDiff = now - lastKeyTime;
     
     // 6시간 = 6 * 60 * 60 * 1000 = 21,600,000 밀리초
@@ -126,8 +138,14 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     
     final prefs = await SharedPreferences.getInstance();
     const keyRechargeTime = 6 * 60 * 60 * 1000; // 6시간
-    final lastKeyTime = prefs.getInt('last_key_time') ?? DateTime.now().millisecondsSinceEpoch;
     final now = DateTime.now().millisecondsSinceEpoch;
+    int? lastKeyTime = prefs.getInt('last_key_time');
+
+    // 값이 없으면 매초 now로 바뀌어 카운트다운이 멈추므로, 1회 저장 후 고정
+    if (lastKeyTime == null) {
+      lastKeyTime = now;
+      await prefs.setInt('last_key_time', lastKeyTime);
+    }
     
     final nextKeyTime = lastKeyTime + keyRechargeTime;
     final timeLeft = nextKeyTime - now;
@@ -224,10 +242,16 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     return Scaffold(
       backgroundColor: Colors.lightBlue[50],
       body: SafeArea(
-        child: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final bottomPadding = MediaQuery.of(context).padding.bottom + 24;
+            return SingleChildScrollView(
+              padding: EdgeInsets.only(bottom: bottomPadding),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(minHeight: constraints.maxHeight),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
               // 게임 제목
               Container(
                 padding: const EdgeInsets.all(20),
@@ -281,6 +305,49 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                 ),
               ),
               
+              const SizedBox(height: 10),
+
+              if (keys < 5) ...[
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  margin: const EdgeInsets.symmetric(horizontal: 20),
+                  decoration: BoxDecoration(
+                    color: Colors.amber[50],
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: Colors.amber[200]!),
+                  ),
+                  child: Column(
+                    children: [
+                      Text(
+                        '열쇠는 6시간마다 하나씩 충전됩니다',
+                        style: TextStyle(
+                          color: Colors.grey[700],
+                          fontSize: 13,
+                        ),
+                      ),
+                      if (timeUntilNextKey.isNotEmpty) ...[
+                        const SizedBox(height: 6),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.schedule, color: Colors.amber[700], size: 16),
+                            const SizedBox(width: 5),
+                            Text(
+                              '다음 충전까지: $timeUntilNextKey',
+                              style: TextStyle(
+                                color: Colors.amber[800],
+                                fontSize: 13,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
+
               const SizedBox(height: 20),
               
               // 수집 게이지 (중복 시 +20%, 100%면 다음 보상 신규 보장)
@@ -380,24 +447,27 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                       ],
                     ),
                     const SizedBox(height: 8),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: List.generate(20, (i) {
-                        final filled = i < brainEnergy;
-                        return Container(
-                          width: 14,
-                          height: 14,
-                          margin: const EdgeInsets.symmetric(horizontal: 1),
-                          decoration: BoxDecoration(
-                            color: filled ? Colors.amber[600] : Colors.grey[300],
-                            shape: BoxShape.circle,
-                            border: Border.all(
-                              color: filled ? Colors.amber[800]! : Colors.grey[400]!,
-                              width: 1,
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: List.generate(20, (i) {
+                          final filled = i < brainEnergy;
+                          return Container(
+                            width: 14,
+                            height: 14,
+                            margin: const EdgeInsets.symmetric(horizontal: 1),
+                            decoration: BoxDecoration(
+                              color: filled ? Colors.amber[600] : Colors.grey[300],
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: filled ? Colors.amber[800]! : Colors.grey[400]!,
+                                width: 1,
+                              ),
                             ),
-                          ),
-                        );
-                      }),
+                          );
+                        }),
+                      ),
                     ),
                     const SizedBox(height: 4),
                     Text(
@@ -479,48 +549,11 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                 ),
               ),
               
-              if (keys < 5) ...[
-                const SizedBox(height: 20),
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.amber[50],
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: Colors.amber[200]!),
-                  ),
-                  child: Column(
-                    children: [
-                      Text(
-                        '열쇠는 6시간마다 하나씩 충전됩니다',
-                        style: TextStyle(
-                          color: Colors.grey[700],
-                          fontSize: 14,
-                        ),
-                      ),
-                      if (timeUntilNextKey.isNotEmpty) ...[
-                        const SizedBox(height: 8),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(Icons.schedule, color: Colors.amber[700], size: 18),
-                            const SizedBox(width: 5),
-                            Text(
-                              '다음 충전까지: $timeUntilNextKey',
-                              style: TextStyle(
-                                color: Colors.amber[800],
-                                fontSize: 14,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ],
-                  ),
+                  ],
                 ),
-              ],
-            ],
-          ),
+              ),
+            );
+          },
         ),
       ),
     );

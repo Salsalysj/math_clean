@@ -450,7 +450,7 @@ class RewardScreen extends StatefulWidget {
   /// 치트 111119: true면 브레인 에너지 없이 스페셜 캐릭터 보상만 지급
   final bool forceSpecialReward;
   
-  const RewardScreen({Key? key, required this.score, this.hasKeys = true, this.forceSpecialReward = false}) : super(key: key);
+  const RewardScreen({super.key, required this.score, this.hasKeys = true, this.forceSpecialReward = false});
 
   @override
   State<RewardScreen> createState() => _RewardScreenState();
@@ -622,6 +622,16 @@ class _RewardScreenState extends State<RewardScreen> {
       useKeyDirectly();
       return;
     }
+    // 수집 게이지 100%면 카테고리 선택 전에 "전체 보상 풀"에서 신규 1개 보장
+    final pity = prefs.getInt('pity_gauge') ?? 0;
+    if (pity >= 100) {
+      final granted = await _grantGuaranteedFromGlobalPool();
+      if (granted) {
+        await _processBrainEnergy();
+        useKeyDirectly();
+        return;
+      }
+    }
     // 그 외: 브레인롯 또는 마인크래프트 몹 선택
     final random = Random();
     isMinecraftMob = random.nextBool(); // 50% 확률
@@ -634,6 +644,63 @@ class _RewardScreenState extends State<RewardScreen> {
     }
     await _processBrainEnergy();
     useKeyDirectly();
+  }
+
+  /// 수집 게이지 100%일 때 전체 보상 풀(브레인롯+몹)에서 신규 1개를 보장 지급.
+  /// 신규가 하나도 없으면 false 반환.
+  Future<bool> _grantGuaranteedFromGlobalPool() async {
+    final prefs = await SharedPreferences.getInstance();
+    final collectedCharacters = prefs.getStringList('collected_characters') ?? [];
+    final collectedMobs = prefs.getStringList('collected_mobs') ?? [];
+    final allMobImages = getMobImages();
+
+    final uncollectedCharacters = rewardImages
+        .where((character) => !collectedCharacters.contains(character))
+        .toList();
+    final uncollectedMobs = allMobImages
+        .where((mob) => !collectedMobs.contains(mob))
+        .toList();
+
+    final totalUncollected = uncollectedCharacters.length + uncollectedMobs.length;
+    if (totalUncollected == 0) {
+      return false;
+    }
+
+    final random = Random();
+    final pickedIndex = random.nextInt(totalUncollected);
+
+    if (pickedIndex < uncollectedCharacters.length) {
+      final pickedImage = uncollectedCharacters[pickedIndex];
+      setState(() {
+        isSpecialCharacter = false;
+        isMinecraftMob = false;
+        selectedImage = pickedImage;
+        selectedCharacterInfo = CharacterDatabase.getCharacterInfo(getCharacterName(pickedImage));
+        selectedMobInfo = null;
+        collectedCount = collectedCharacters.length + 1;
+        totalCharacters = rewardImages.length;
+        isAllCollected = uncollectedCharacters.length == 1;
+      });
+      await saveCharacterToCollection();
+      print('수집 게이지 100% 발동(전체 풀): 신규 브레인롯 보장');
+    } else {
+      final mobIndex = pickedIndex - uncollectedCharacters.length;
+      final pickedImage = uncollectedMobs[mobIndex];
+      setState(() {
+        isSpecialCharacter = false;
+        isMinecraftMob = true;
+        selectedImage = pickedImage;
+        selectedMobInfo = MobDatabase.getMobInfo(getMobName(pickedImage));
+        selectedCharacterInfo = null;
+        collectedCount = collectedMobs.length + 1;
+        totalCharacters = allMobImages.length;
+        isAllCollected = uncollectedMobs.length == 1;
+      });
+      await saveMobToCollection();
+      print('수집 게이지 100% 발동(전체 풀): 신규 몹 보장');
+    }
+
+    return true;
   }
 
   static const int _specialMaxLevel = 5;
@@ -701,13 +768,19 @@ class _RewardScreenState extends State<RewardScreen> {
   Future<void> useKeyDirectly() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      int keys = prefs.getInt('keys') ?? 5;
-      print('현재 열쇠 개수: $keys');
+      final currentKeys = prefs.getInt('keys') ?? 5;
+      print('현재 열쇠 개수: $currentKeys');
       
-      if (keys > 0) {
-        keys--;
-        await prefs.setInt('keys', keys);
-        print('열쇠 차감 완료. 남은 열쇠: $keys');
+      if (currentKeys > 0) {
+        final nextKeys = currentKeys - 1;
+        await prefs.setInt('keys', nextKeys);
+
+        // 열쇠 충전 타이머는 "5 -> 4"로 떨어지는 시점부터 시작
+        if (currentKeys == 5) {
+          await prefs.setInt('last_key_time', DateTime.now().millisecondsSinceEpoch);
+        }
+
+        print('열쇠 차감 완료. 남은 열쇠: $nextKeys');
       } else {
         print('열쇠가 0개라서 차감할 수 없음');
       }

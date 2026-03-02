@@ -9,7 +9,7 @@ import 'package:math_game_clean/special_characters.dart';
 class QuizScreen extends StatefulWidget {
   final bool hasKeys;
   
-  const QuizScreen({Key? key, this.hasKeys = true}) : super(key: key);
+  const QuizScreen({super.key, this.hasKeys = true});
 
   @override
   State<QuizScreen> createState() => _QuizScreenState();
@@ -478,7 +478,7 @@ class _QuizScreenState extends State<QuizScreen> {
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Icon(Icons.star, color: Colors.amber, size: 30),
+                    const Icon(Icons.star, color: Colors.amber, size: 30),
                     const SizedBox(width: 10),
                     Text(
                       '점수: $score',
