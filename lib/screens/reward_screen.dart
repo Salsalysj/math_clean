@@ -459,6 +459,9 @@ class RewardScreen extends StatefulWidget {
 class _RewardScreenState extends State<RewardScreen> {
   String selectedImage = '';
   bool hasEarnedCharacter = false;
+  bool? isNewReward; // true: 신규, false: 중복/레벨업, null: 미표시
+  String rewardBadgeTitle = '';
+  String rewardBadgeSubtitle = '';
   CharacterInfo? selectedCharacterInfo;
   MobInfo? selectedMobInfo;
   final GlobalKey _repaintBoundaryKey = GlobalKey();
@@ -469,6 +472,19 @@ class _RewardScreenState extends State<RewardScreen> {
   bool isSpecialCharacter = false; // true: 이번 보상이 스페셜 캐릭터 (브레인 에너지 20 보장)
   SpecialInfo? selectedSpecialInfo; // 스페셜 보상 시 CSV 기반 카드 정보
   int selectedSpecialLevel = 1; // 스페셜 보상 시 도감 표시용 레벨 (1~5)
+
+  void _setRewardBadge({
+    required bool isNew,
+    required String title,
+    required String subtitle,
+  }) {
+    if (!mounted) return;
+    setState(() {
+      isNewReward = isNew;
+      rewardBadgeTitle = title;
+      rewardBadgeSubtitle = subtitle;
+    });
+  }
   
   // brainrot_image 폴더의 이미지 파일들
   final List<String> rewardImages = [
@@ -682,6 +698,11 @@ class _RewardScreenState extends State<RewardScreen> {
         isAllCollected = uncollectedCharacters.length == 1;
       });
       await saveCharacterToCollection();
+      _setRewardBadge(
+        isNew: true,
+        title: '신규 획득!',
+        subtitle: '전체 보상 풀 100% 보장으로 새 캐릭터를 얻었어요!',
+      );
       print('수집 게이지 100% 발동(전체 풀): 신규 브레인롯 보장');
     } else {
       final mobIndex = pickedIndex - uncollectedCharacters.length;
@@ -697,6 +718,11 @@ class _RewardScreenState extends State<RewardScreen> {
         isAllCollected = uncollectedMobs.length == 1;
       });
       await saveMobToCollection();
+      _setRewardBadge(
+        isNew: true,
+        title: '신규 획득!',
+        subtitle: '전체 보상 풀 100% 보장으로 새 몹을 얻었어요!',
+      );
       print('수집 게이지 100% 발동(전체 풀): 신규 몹 보장');
     }
 
@@ -736,11 +762,21 @@ class _RewardScreenState extends State<RewardScreen> {
       collected.add(picked);
       levels[picked] = 1;
       await prefs.setStringList('collected_special', collected);
+      _setRewardBadge(
+        isNew: true,
+        title: '신규 스페셜 획득!',
+        subtitle: '브레인 에너지 보상으로 새로운 스페셜 캐릭터를 얻었어요!',
+      );
     } else {
       picked = allSpecial.isNotEmpty ? allSpecial[Random().nextInt(allSpecial.length)] : '';
       if (picked.isNotEmpty) {
         levels[picked] = ((levels[picked] ?? 1) + 1).clamp(1, _specialMaxLevel);
       }
+      _setRewardBadge(
+        isNew: false,
+        title: '스페셜 레벨업!',
+        subtitle: '중복 스페셜이 나와 레벨이 올랐어요.',
+      );
     }
     await _saveSpecialLevels(prefs, levels);
     if (consumeBrainEnergy) await prefs.setInt('brain_energy', 0);
@@ -900,6 +936,11 @@ class _RewardScreenState extends State<RewardScreen> {
       final newPity = (pity + 20).clamp(0, 100);
       await prefs.setInt('pity_gauge', newPity);
       pity_state.pendingPityGauge = newPity; // 메인 복귀 시 즉시 반영
+      _setRewardBadge(
+        isNew: false,
+        title: '중복 획득',
+        subtitle: '수집 게이지가 +20% 상승했어요.',
+      );
       print('보상 수령(중복 캐릭터) → 수집 게이지 $pity% → $newPity%');
     } else {
       // 새 캐릭터 획득 시 수집 게이지 초기화
@@ -907,6 +948,11 @@ class _RewardScreenState extends State<RewardScreen> {
       await prefs.setStringList('collected_characters', collectedCharacters);
       await prefs.setInt('pity_gauge', 0);
       pity_state.pendingPityGauge = 0;
+      _setRewardBadge(
+        isNew: true,
+        title: '신규 획득!',
+        subtitle: '축하해요! 새로운 캐릭터가 도감에 등록되었어요.',
+      );
       print('보상 수령(신규 캐릭터) → 수집 게이지 0%로 초기화');
     }
   }
@@ -923,6 +969,11 @@ class _RewardScreenState extends State<RewardScreen> {
       final newPity = (pity + 20).clamp(0, 100);
       await prefs.setInt('pity_gauge', newPity);
       pity_state.pendingPityGauge = newPity; // 메인 복귀 시 즉시 반영
+      _setRewardBadge(
+        isNew: false,
+        title: '중복 획득',
+        subtitle: '수집 게이지가 +20% 상승했어요.',
+      );
       print('보상 수령(중복 몹) → 수집 게이지 $pity% → $newPity%');
     } else {
       // 새 몹 획득 시 수집 게이지 초기화
@@ -930,8 +981,77 @@ class _RewardScreenState extends State<RewardScreen> {
       await prefs.setStringList('collected_mobs', collectedMobs);
       await prefs.setInt('pity_gauge', 0);
       pity_state.pendingPityGauge = 0;
+      _setRewardBadge(
+        isNew: true,
+        title: '신규 획득!',
+        subtitle: '축하해요! 새로운 몹이 도감에 등록되었어요.',
+      );
       print('보상 수령(신규 몹) → 수집 게이지 0%로 초기화');
     }
+  }
+
+  Widget _buildRewardResultBadge() {
+    if (isNewReward == null) return const SizedBox.shrink();
+
+    final bool isNew = isNewReward == true;
+    return Container(
+      margin: const EdgeInsets.only(top: 12, bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        gradient: isNew
+            ? const LinearGradient(
+                colors: [Color(0xFFFFD54F), Color(0xFFFF8A65)],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              )
+            : null,
+        color: isNew ? null : Colors.blueGrey[50],
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: isNew ? const Color(0xFFFFB300) : Colors.blueGrey[200]!,
+          width: 1.5,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: (isNew ? Colors.orange : Colors.grey).withOpacity(0.25),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            isNew ? Icons.celebration : Icons.repeat,
+            color: isNew ? Colors.white : Colors.blueGrey[700],
+            size: 20,
+          ),
+          const SizedBox(width: 8),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                isNew ? '🎉 $rewardBadgeTitle' : rewardBadgeTitle,
+                style: TextStyle(
+                  color: isNew ? Colors.white : Colors.blueGrey[800],
+                  fontWeight: FontWeight.bold,
+                  fontSize: 13,
+                ),
+              ),
+              if (rewardBadgeSubtitle.isNotEmpty)
+                Text(
+                  rewardBadgeSubtitle,
+                  style: TextStyle(
+                    color: isNew ? Colors.white.withOpacity(0.95) : Colors.blueGrey[600],
+                    fontSize: 11,
+                  ),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
   }
 
   String getCharacterName(String imagePath) {
@@ -1297,6 +1417,7 @@ class _RewardScreenState extends State<RewardScreen> {
                 color: Colors.amber[800],
               ),
             ),
+            _buildRewardResultBadge(),
             
             // 수집 진행 상황
             if (hasEarnedCharacter) ...[
@@ -1515,6 +1636,7 @@ class _RewardScreenState extends State<RewardScreen> {
                 color: Colors.green[800],
               ),
             ),
+            _buildRewardResultBadge(),
             
             // 수집 진행 상황
             const SizedBox(height: 10),
